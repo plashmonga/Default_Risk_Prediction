@@ -1,4 +1,4 @@
-# Default_Risk_Prediction
+# Default Risk Prediction
 This algorithm can predict people described by a set of attributes will have good or bad credit risks
 
 The data for this problem is taken from UCI Machine Learning Repository (https://archive.ics.uci.edu/ml/datasets/statlog+(german+credit+data)). 
