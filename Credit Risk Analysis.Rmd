@@ -1,0 +1,471 @@
+---
+title: "Default Risk Prediction"
+author: "Plash"
+date: "4/15/2020"
+
+output:
+  html_document:
+    code_folding: hide
+    df_print: paged
+---
+
+<style>
+body {
+text-align: justify}
+</style>
+
+This project predict people described by a set of attributes will have __good or bad credit risks__ 
+
+# {.tabset .tabset-fade}
+
+## Data
+
+The data for this problem is taken from UCI Machine Learning Repository (https://archive.ics.uci.edu/ml/datasets/statlog+(german+credit+data)). The original dataset contains 1000 entries with 20 categorial/symbolic attributes prepared by Prof. Hofmann. In this dataset, each entry represents a person who takes a credit by a bank. Each person is classified as good or bad credit risks according to the set of attributes.
+ 
+
+__Approach__
+
+  * EDA
+  * correlation between these categorical variables and the response variable
+  * Machine Learning algorithms to select best model for classification customers into good or bad credit. 
+
+
+```{r, results='hide', warning=FALSE, message=FALSE}
+library(dplyr)
+library(glmnet)
+library(ROCR)
+library(PRROC)
+library(boot)
+library(rpart)
+library(rpart.plot)
+library(knitr)
+library(dplyr)
+library(tidyr)
+library(reshape2)
+library(RColorBrewer)
+library(GGally)
+library(ggplot2)
+library(boot)
+library(verification)
+
+set.seed(1234)
+credit.data <- read.table("D:/Course/Data Mining/Data Mining 1/Homework/german.data")
+```
+
+We get the data from the link. We need to provide names for the columns and change the response labels to 1 and 0:
+0 corresponding to a good credit record and 1 corresponding to a bad one (positive class).
+
+```{r,  warning=FALSE}
+colnames(credit.data)=c("chk_acct","duration","credit_his","purpose","amount","saving_acct","present_emp","installment_rate","sex","other_debtor","present_resid","property","age","other_install","housing","n_credits","job","n_people","telephone","foreign","response")
+
+#orginal response coding 1= good, 2 = bad
+#we need 0 = good, 1 = bad
+
+credit.data$response = credit.data$response - 1
+
+
+```
+
+__Data Structure__
+
+There is a total on 21 attributes in the dataset. Their descriptions and details have been tabulated below:
+
+We take the summary statistics of the dataset, the dataset has a total of 1000 observations with 21 variables, out of which 8 are numerical variables including the response and 13 are categorical variables with various levels. The summary statistics for the variables have been presented
+
+* Status of existing checking account.
+* Duration in month
+* Credit history
+* Purpose
+* Credit amount
+* Savings account/bonds
+* Present employment since
+* Installment rate in percentage of disposable income
+* Personal status and sex
+* Other debtors / guarantors
+* Present residence since
+* Property
+* Age in years
+* Other installment plans
+* Housing
+* Number of existing credits at this bank
+* Job
+* Number of people being liable to provide maintenance for
+* Telephone
+* foreign worker
+
+```{r}
+glimpse(credit.data)
+
+
+#converting response to factor
+
+credit.data$response <- as.factor(credit.data$response)
+
+summary(credit.data)
+
+```
+
+## Exploratory Data Analysis {.tabset .tabset-fade}
+
+### Continuous Variables
+
+We get the following insights from our EDA of continuous variables:
+
+* From the age variable, we see that the median value for bad records is lesser than that of good records, it might be premature to say young people tend to have bad credit records, but we can safely assume it tends to be riskier.
+* The installment_rate variable has a great deal of difference between the good and bad records, we see that bad records have almost the double median value than good ones.
+* The median value and the range of the duration variables appears to be on the higher side of bad records as compared to good records
+* For the amount variable, we observe that the amount for bad records is larger in general as compared to good ones
+* We further built on this by plotting the density curve along the vertical line for their mean value and find that there is a great deal of difference for the duration as well as amount variable.
+
+__Duration__
+
+```{r}
+amount.mean = credit.data %>% dplyr::select(amount, response) %>% group_by(response) %>% summarise(m =mean(amount))
+duration.mean = credit.data %>% dplyr::select(duration, response) %>%group_by(response) %>% summarise( m =mean(duration))
+
+ggplot(credit.data, aes(duration, fill=response)) + 
+  geom_density(alpha=.5) 
+```
+
+```{r}
+test.m = credit.data[,c(2,5,8,13,16,18,21)]
+test.m$response <- as.numeric(test.m$response)
+ggplot(melt(credit.data[,c(2,21)]), aes(x = variable, y = value, fill = response)) + geom_boxplot() + xlab("response") + ylab("duration")
+```
+
+
+__Installment Rate__
+
+```{r}
+ggplot(credit.data, aes(factor(installment_rate), ..count..)) + 
+  geom_bar(aes(fill = response), position = "dodge") + xlab("Installment Rates")
+```
+
+
+__Amount__
+```{r}
+ggplot(credit.data, aes(amount, fill=response)) + 
+  geom_density(alpha=.5) 
+```
+
+```{r}
+ggplot(melt(credit.data[,c(5,21)]), aes(x = variable, y = value, fill = response)) + 
+geom_boxplot() + xlab("response") + ylab("amount")
+```
+
+__Age__
+
+```{r}
+ggplot(melt(credit.data[,c(13,21)]), aes(x = variable, y = value, fill = response)) + 
+geom_boxplot()+ xlab("response") + ylab("age")
+```
+
+
+__n_credits__
+
+```{r}
+ggplot(melt(credit.data[,c(16,21)]), aes(x = variable, y = value, fill = response)) + 
+geom_boxplot()
+```
+
+
+### Categorical Variables
+
+We get the following insights from our EDA of categorical variables:
+
+* For chk_acct we see that, the current status of the checking account matters as the frequency of the response variables is seen to differ from one sub category to another, overall A11 houses more number of bad credit records and A14 the least
+* For credit_his, we observe that proportion of the response variable varies significantly, for categories A30, A31 we see the number of bad credit records are greater.
+* For the purpose variable, we observe that the proportion of good and bad credit record varies also overall A44, A45, A410 and A46 seem to include more risky records.
+* We also observe these trends in other variables like sex, other_debtor, saving_acct, other_install and foreign. Overall, the trend looks significant in saving_acct, purpose, credit_his and chk_acct as compared to others.
+
+__chk_acct__
+
+
+```{r}
+ggplot(credit.data, aes(chk_acct, ..count..)) + 
+  geom_bar(aes(fill = response), position = "dodge") 
+```
+
+__credit_hist__
+
+```{r}
+ggplot(credit.data, aes(credit_his, ..count..)) + 
+  geom_bar(aes(fill = response), position = "dodge") 
+```
+
+__purpose__
+
+```{r}
+ggplot(credit.data, aes(purpose, ..count..)) + 
+  geom_bar(aes(fill = response), position = "dodge") 
+```
+
+__Saving_acct__
+
+```{r}
+ggplot(credit.data, aes(saving_acct, ..count..)) + 
+  geom_bar(aes(fill = response), position = "dodge") 
+```
+
+__other_debtor__
+
+
+```{r}
+ggplot(credit.data, aes(other_debtor, ..count..)) + 
+  geom_bar(aes(fill = response), position = "dodge") 
+```
+
+__sex__
+
+```{r}
+ggplot(credit.data, aes(sex, ..count..)) + 
+  geom_bar(aes(fill = response), position = "dodge") 
+```
+
+__other_install__
+
+```{r}
+ggplot(credit.data, aes(other_install, ..count..)) + 
+  geom_bar(aes(fill = response), position = "dodge") 
+```
+
+
+__foreign__
+
+```{r}
+ggplot(credit.data, aes(foreign, ..count..)) + 
+  geom_bar(aes(fill = response), position = "dodge") 
+```
+
+## Machine Learning Algorithms {.tabset .tabset-fade}
+
+
+```{r, results='hide', warning=FALSE}
+# Sampling data
+
+index <- sample(nrow(credit.data),nrow(credit.data)*0.70)
+credit.train = credit.data[index,]
+credit.test = credit.data[-index,]
+
+
+creditcost <- function(observed, predicted){
+  weight1 = 5
+  weight0 = 1
+  c1 = (observed==1)&(predicted == 0) #logical vector - true if actual 1 but predict 0
+  c0 = (observed==0)&(predicted == 1) #logical vector - true if actual 0 but predict 1
+  return(mean(weight1*c1+weight0*c0))
+}
+
+
+
+```
+
+### Logistic Regression
+
+__Key insights__
+
+* As per analysis, Step AIC logit model was best fit is used
+* MR is 0.27 and AUC is 0.85
+
+
+
+```{r}
+credit.glm.logit<- glm(response~., family=binomial, data=credit.train)
+credit.glm.back.AIC <- step(credit.glm.logit) # backward selection (if you don't specify anything)
+german.logit <- summary(credit.glm.back.AIC)
+credit.glm.back.AIC$deviance
+AIC(credit.glm.back.AIC)
+BIC(credit.glm.back.AIC)
+
+
+pred.glm.a <- predict(credit.glm.back.AIC, type="response")
+
+
+pred1 <- prediction(pred.glm.a, credit.train$response)
+perf1 <- performance(pred1, "tpr", "fpr")
+plot(perf1, colorize=TRUE)
+AUC.logit <- unlist(slot(performance(pred1, "auc"), "y.values"))
+AUC.logit
+
+#misclassification rate table
+
+#define a cost rate function
+costfunc = function(obs, pred.p, pcut){
+  weight1 = 5   # define the weight for "true=1 but pred=0" (FN)
+  weight0 = 1    # define the weight for "true=0 but pred=1" (FP)
+  c1 = (obs==1)&(pred.p<pcut)    # count for "true=1 but pred=0"   (FN)
+  c0 = (obs==0)&(pred.p>=pcut)   # count for "true=0 but pred=1"   (FP)
+  cost = mean(weight1*c1 + weight0*c0)  # misclassification with weight
+  return(cost)
+}
+p.seq = seq(0.01, 1, 0.01) 
+
+cost = rep(0, length(p.seq))  
+for(i in 1:length(p.seq)){ 
+  cost[i] = costfunc(obs = credit.train$response, pred.p = pred.glm.a, pcut = p.seq[i])  
+}
+
+plot(p.seq, cost)
+
+optimal.pcut.glm.a = p.seq[which(cost==min(cost))]
+optimal.pcut.glm.a
+
+class.glm0.train.opt<- (pred.glm.a>optimal.pcut.glm.a)*1
+table(credit.train$response, class.glm0.train.opt, dnn = c("True", "Predicted"))
+
+MR.logit<- mean(credit.train$response!= class.glm0.train.opt)
+MR.logit
+
+```
+
+### CART Analysis
+
+__Key Insights__
+
+* MR is 0.44 & AUC is 0.67
+
+```{r}
+
+credit.rpart <- rpart(formula = response ~ . , data = credit.train, method = "class", parms = list(loss=matrix(c(0,5,1,0), nrow = 2)))
+prp(credit.rpart,digits = 4, extra = 1)
+
+#in sample
+credit.train.pred.tree<- predict(credit.rpart, credit.train, type="class")
+table(credit.train$response, credit.train.pred.tree, dnn=c("Truth","Predicted"))
+
+# out of sample
+credit.test.pred.tree<- predict(credit.rpart, credit.test, type="class")
+table(credit.test$response, credit.test.pred.tree, dnn=c("Truth","Predicted"))
+
+MR.tree<- mean(credit.test$response!= credit.test.pred.tree)
+MR.tree
+
+credit.rpart <- rpart(formula = response ~ ., data = credit.train, 
+                      method = "class", 
+                      parms = list(loss=matrix(c(0,5,1,0), nrow = 2)))
+#Probability of getting 1
+credit.test.prob.rpart = predict(credit.rpart,credit.test, type="prob")
+
+pred = prediction(credit.test.prob.rpart[,2], credit.test$response)
+perf = performance(pred, "tpr", "fpr")
+plot(perf, colorize=TRUE)
+AUC.tree <- slot(performance(pred, "auc"), "y.values")[[1]]
+AUC.tree
+
+```
+
+### Generalized Additive Model (GAM)
+
+GAM function run only on the continuous variables present in the German credit dataset: ‘age’, ‘duration’ and ‘amount’
+
+__Key Insights__
+
+* Edf of duration and age is 1,remove the spline function from these variables, and rerun the gam model.
+* MR for the in-sample and out-of sample for the dataset are 0.30 and 0.59 respectively.
+
+```{r}
+library(mgcv)
+
+## Create a formula for a model with a large number of variables:
+credit.gam1 <- gam(as.factor(response)~chk_acct+s(duration)+credit_his+purpose+s(amount)+saving_acct+present_emp+installment_rate+sex+other_debtor+present_resid+property
+                      +s(age)+other_install+housing+n_credits+telephone+foreign , family=binomial,data=credit.train)
+summary(credit.gam1)
+plot(credit.gam1, shade=TRUE)
+
+credit.gam <- gam(as.factor(response)~chk_acct+(duration)+credit_his+purpose+s(amount)+saving_acct+present_emp+installment_rate+sex+other_debtor+present_resid+property
+                      +(age)+other_install+housing+n_credits+telephone+foreign , family=binomial,data=credit.train)
+summary(credit.gam)
+
+
+AIC(credit.gam)
+BIC(credit.gam)
+credit.gam$deviance
+
+pcut.gam <- (1/6)
+prob.gam.in<-predict(credit.gam,credit.train,type="response")
+pred.gam.in<-(prob.gam.in>=pcut.gam)*1
+table(credit.train$response,pred.gam.in,dnn=c("Observed","Predicted"))
+#MR
+MR.gam <- mean(ifelse(credit.train$response != pred.gam.in, 1, 0))
+#Cost assocaited with MR
+creditcost(credit.train$response, pred.gam.in)
+
+#Out-of-sample performance########
+prob.gam.out<-predict(credit.gam,credit.test,type="response")
+pred.gam.out<-(prob.gam.out>=pcut.gam)*1
+table(credit.test$response,pred.gam.out,dnn=c("Observed","Predicted"))
+
+#MR
+Mr.gam.out <- mean(ifelse(credit.test$response != pred.gam.out, 1, 0))
+#Cost assocaited with MR
+creditcost(credit.test$response, pred.gam.out)
+
+
+```
+
+### Neural Network
+
+The response(in classification) needs not to be standardized 
+
+__Key Insights__
+
+*	Neural Network is like a black box, which shows the actual outcomes but the interpretation of the features is much more difficult as compare to other models.
+*	MR of in sample and out of sample from the Neural Network model comes out to be 0.21 and 0.69 respectively.
+
+```{r, results='hide', warning=FALSE}
+library(caret)
+library(NeuralNetTools)
+par(mfrow=c(1,1))
+credit.nnet <- train(as.factor(response)~., data=credit.train,method="nnet",na.action=na.exclude,hidden=c(5,3),maxit=300,act.fct="logistic",learningrate=0.1)
+```
+
+
+```{r}
+plot(credit.nnet)
+print(credit.nnet)
+```
+
+
+```{r}
+plotnet(credit.nnet$finalModel, y_names = "response")
+title("Graphical Representation of our Neural Network")
+
+
+#In sample
+prob.nnet= predict(credit.nnet,type='prob')
+pred.nnet = as.numeric(prob.nnet[,2] >=pcut.gam)
+table(credit.train$response,pred.nnet, dnn=c("Observed","Predicted"))
+#MR
+MR.nnet_in <- mean(ifelse(credit.train$response != pred.nnet, 1, 0))
+MR.nnet_in
+#Costfunction
+creditcost(credit.train$response, pred.nnet)
+
+
+#Out of sample
+prob.nnet.test= predict(credit.nnet,credit.test,type='prob')
+pred.nnet.test = as.numeric(prob.nnet.test[,2] > pcut.gam)
+table(credit.test$response,pred.nnet.test, dnn=c("Observed","Predicted"))
+##MR
+MR.nnet_out <- mean(ifelse(credit.test$response != pred.nnet.test, 1, 0))
+#Costfunction
+creditcost(credit.test$response, pred.nnet.test)
+
+```
+
+
+## Conclusion
+
+Based on MR , it shows logistic regression and Neural network are the best model among all for Boston Housing Data 
+
+
+```{r}
+##Final Table fo MR in sample
+
+stats.models <- data.frame("Model Name" = c("Logistic Regression","CART", "GAM","Neural Network"),
+                             "MR" = c(MR.logit,MR.tree,MR.gam,MR.nnet_in)
+                          )
+
+stats.models
+
+```
